@@ -70,8 +70,12 @@ def search_articles(query: str, limit: int = 20):
         SELECT id, url, title, summary, published_at, source
         FROM articles
         WHERE title LIKE ? OR summary LIKE ? OR content LIKE ?
-        ORDER BY published_at DESC NULLS LAST, id DESC
+        ORDER BY 
+            (published_at IS NULL),        -- NULLS kommen ans Ende
+            published_at DESC,
+            id DESC
         LIMIT ?
+
         """,
         (like, like, like, limit),
     )
