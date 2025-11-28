@@ -8,15 +8,11 @@ from fastapi.responses import JSONResponse
 from db import search_articles
 from ingest import ingest_all
 
-
-from fastapi import FastAPI, HTTPException, Query
-from fastapi.responses import JSONResponse
-
-from db import search_articles
-
 app = FastAPI(title="Lokal-Archiv-Tool")
 
+# Secret-Token, das wir in Render als Environment Variable setzen
 INGEST_TOKEN = os.getenv("INGEST_TOKEN", "changeme")
+
 
 @app.get("/search")
 def search(q: str = Query(..., description="Suchbegriff"), limit: int = 20):
@@ -30,6 +26,7 @@ def search(q: str = Query(..., description="Suchbegriff"), limit: int = 20):
 
     results = search_articles(q, limit=limit)
     return JSONResponse({"query": q, "count": len(results), "results": results})
+
 
 @app.get("/ingest")
 def trigger_ingest(token: str = Query(..., description="Secret-Token zum Auslösen des Ingests")):
