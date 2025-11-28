@@ -50,6 +50,23 @@ def ingest_feed(feed_url: str):
         count += 1
 
     print(f"✓ {count} Einträge aus {feed_url} verarbeitet.")
+    return count
+
+def ingest_all():
+    """Alle konfigurierten Feeds einlesen und eine kleine Zusammenfassung zurückgeben."""
+    init_db()
+    total = 0
+    per_feed = {}
+
+    for feed_url in FEEDS:
+        count = ingest_feed(feed_url)
+        per_feed[feed_url] = count
+        total += count
+
+    return {
+        "total_articles_processed": total,
+        "per_feed": per_feed,
+    }
 
 
 def main():
