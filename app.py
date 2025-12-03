@@ -5,8 +5,11 @@ import os
 from fastapi import FastAPI, HTTPException, Query, Form
 from fastapi.responses import JSONResponse
 
+
 from db import search_articles, init_db
 from ingest import ingest_all
+from backfill import backfill_day as backfill_day_func
+
 
 app = FastAPI(title="Lokal-Archiv-Tool")
 
@@ -94,6 +97,25 @@ async def slack_archiv(
         "response_type": "in_channel",
         "text": text_response,
     }
+    
+@app.get("/backfill_day")
+def backfill_day_endpoint(
+    date: str = Query(..., description="Datum im Format YYYY-MM-DD"),
+    token: str = Query(..., description="Secret-Token zum Auslösen des Backfills"),
+):
+    """
+    Backfill für einen Tag: holt alle Lokales-Göttingen-Artikel aus dem Archiv.
+    Aufruf: /backfill_day?date=2025-07-01&token=DEIN_TOKEN
+    """
+    if token != INGEST_TOKEN:
+        raise HTTPException(status_code=403, detail="Ungültiger Token")
+
+    try:
+        summary = backfill_day_func(date)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    return {"status": "ok", **summary}
 
 
 @app.get("/")
