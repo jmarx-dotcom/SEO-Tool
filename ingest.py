@@ -5,9 +5,36 @@ from datetime import datetime
 from typing import Optional
 
 import feedparser
+import requests
+from bs4 import BeautifulSoup
 
 from config import FEEDS
 from db import init_db, save_article
+
+
+def fetch_fulltext(url: str) -> str:
+    """Versucht, den Artikelvolltext von der URL zu holen."""
+    try:
+        resp = requests.get(url, timeout=10)
+        resp.raise_for_status()
+    except Exception as e:
+        print(f"[WARN] Konnte {url} nicht laden: {e}")
+        return ""
+
+    soup = BeautifulSoup(resp.text, "html.parser")
+
+    # 1. Versuchen, einen <article>-Block zu finden
+    article = soup.find("article")
+    if article:
+        paragraphs = article.find_all("p")
+    else:
+        # 2. Fallback: alle <p>-Tags auf der Seite
+        paragraphs = soup.find_all("p")
+
+    texts = [p.get_text(strip=True) for p in paragraphs]
+    texts = [t for t in texts if t]  # nur nicht-leere Absätze behalten
+
+    return "\n\n".join(texts)
 
 
 def parse_published(entry) -> Optional[str]:
@@ -22,7 +49,7 @@ def parse_published(entry) -> Optional[str]:
         return None
 
 
-def ingest_feed(feed_url: str):
+def ingest_feed(feed_url: str) -> int:
     print(f"▶ Lese Feed: {feed_url}")
     feed = feedparser.parse(feed_url)
 
@@ -39,11 +66,14 @@ def ingest_feed(feed_url: str):
 
         published_at = parse_published(entry)
 
+        # Volltext von der Artikelseite holen
+        content = fetch_fulltext(url)
+
         save_article(
             url=url,
             title=title,
             summary=summary,
-            content="",  # Volltext holen wir später aus der HTML-Seite
+            content=content,
             published_at=published_at,
             source=source_title,
         )
@@ -51,6 +81,7 @@ def ingest_feed(feed_url: str):
 
     print(f"✓ {count} Einträge aus {feed_url} verarbeitet.")
     return count
+
 
 def ingest_all():
     """Alle konfigurierten Feeds einlesen und eine kleine Zusammenfassung zurückgeben."""
