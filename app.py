@@ -5,10 +5,13 @@ import os
 from fastapi import FastAPI, HTTPException, Query, Form
 from fastapi.responses import JSONResponse
 
-from db import search_articles
+from db import search_articles, init_db
 from ingest import ingest_all
 
 app = FastAPI(title="Lokal-Archiv-Tool")
+
+# Beim Start sicherstellen, dass die Datenbank & Tabelle existieren
+init_db()
 
 # Secret-Token, das wir in Render als Environment Variable setzen
 INGEST_TOKEN = os.getenv("INGEST_TOKEN", "changeme")
