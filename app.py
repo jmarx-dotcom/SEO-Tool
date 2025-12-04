@@ -5,11 +5,9 @@ import os
 from fastapi import FastAPI, HTTPException, Query, Form
 from fastapi.responses import JSONResponse
 
-
 from db import search_articles, init_db
 from ingest import ingest_all
 from backfill import backfill_day as backfill_day_func, backfill_range as backfill_range_func
-
 
 app = FastAPI(title="Lokal-Archiv-Tool")
 
@@ -21,17 +19,34 @@ INGEST_TOKEN = os.getenv("INGEST_TOKEN", "changeme")
 
 
 @app.get("/search")
-def search(q: str = Query(..., description="Suchbegriff"), limit: int = 20):
+def search(
+    q: str = Query(..., description="Suchbegriff"),
+    limit: int = 20,
+    from_date: str | None = Query(None, description="Startdatum YYYY-MM-DD"),
+    to_date: str | None = Query(None, description="Enddatum YYYY-MM-DD"),
+):
     """
     Einfache Suche über Titel, Summary und Content.
-    Aufruf: /search?q=Weihnachtsmarkt&limit=10
+    Optional: Datumsfilter von/bis (YYYY-MM-DD).
+
+    Beispiele:
+    - /search?q=Weihnachtsmarkt&limit=10
+    - /search?q=Hochschulsport&from_date=2025-07-01&to_date=2025-07-31
     """
     q = q.strip()
     if not q:
         raise HTTPException(status_code=400, detail="Parameter 'q' darf nicht leer sein.")
 
-    results = search_articles(q, limit=limit)
-    return JSONResponse({"query": q, "count": len(results), "results": results})
+    results = search_articles(q, limit=limit, from_date=from_date, to_date=to_date)
+    return JSONResponse(
+        {
+            "query": q,
+            "from_date": from_date,
+            "to_date": to_date,
+            "count": len(results),
+            "results": results,
+        }
+    )
 
 
 @app.get("/ingest")
@@ -50,30 +65,53 @@ def trigger_ingest(token: str = Query(..., description="Secret-Token zum Auslös
 @app.post("/slack/archiv")
 async def slack_archiv(
     text: str = Form(""),
-    user_name: str = Form(None),
-    channel_id: str = Form(None),
+    user_name: str | None = Form(None),
+    channel_id: str | None = Form(None),
 ):
     """
     Slash-Command-Endpoint für Slack: /archiv <Suchbegriffe>
 
-    Slack schickt ein POST mit form-url-encoded Daten, u.a.:
-    - text: alles, was nach /archiv eingegeben wurde
+    Optional: Datumsfilter im Text, z.B.:
+    /archiv Hochschulsport seit:2025-07-01 bis:2025-07-31
     """
-    query = text.strip()
+    raw = text.strip()
 
-    if not query:
-        # Nur für die Person sichtbar, die den Command genutzt hat
+    if not raw:
         return {
             "response_type": "ephemeral",
             "text": "Bitte gib einen Suchbegriff an, z.B. `/archiv Weihnachtsmarkt`.",
         }
 
-    results = search_articles(query, limit=5)
+    parts = raw.split()
+    query_parts: list[str] = []
+    from_date: str | None = None
+    to_date: str | None = None
 
-    if not results:
+    for part in parts:
+        if part.startswith("seit:"):
+            from_date = part.removeprefix("seit:")
+        elif part.startswith("bis:"):
+            to_date = part.removeprefix("bis:")
+        else:
+            query_parts.append(part)
+
+    query = " ".join(query_parts).strip()
+
+    if not query:
         return {
             "response_type": "ephemeral",
-            "text": f"Keine Treffer für `{query}`.",
+            "text": "Bitte gib einen Suchbegriff an, z.B. `/archiv Weihnachtsmarkt seit:2025-07-01`.",
+        }
+
+    results = search_articles(query, limit=5, from_date=from_date, to_date=to_date)
+
+    if not results:
+        extra = ""
+        if from_date or to_date:
+            extra = f" im Zeitraum {from_date or '...'} bis {to_date or '...'}"
+        return {
+            "response_type": "ephemeral",
+            "text": f"Keine Treffer für `{query}`{extra}.",
         }
 
     lines = []
@@ -90,14 +128,18 @@ async def slack_archiv(
         )
         lines.append(line)
 
-    text_response = f"Suchergebnisse für *`{query}`*:\n\n" + "\n\n".join(lines)
+    dates_info = ""
+    if from_date or to_date:
+        dates_info = f" (Zeitraum {from_date or '...'} bis {to_date or '...'})"
 
-    # in_channel = für alle im Channel sichtbar; wenn du erstmal "privat" testen willst, nimm "ephemeral"
+    text_response = f"Suchergebnisse für *`{query}`*{dates_info}:\n\n" + "\n\n".join(lines)
+
     return {
         "response_type": "in_channel",
         "text": text_response,
     }
-    
+
+
 @app.get("/backfill_day")
 def backfill_day_endpoint(
     date: str = Query(..., description="Datum im Format YYYY-MM-DD"),
@@ -116,7 +158,9 @@ def backfill_day_endpoint(
         raise HTTPException(status_code=400, detail=str(e))
 
     return {"status": "ok", **summary}
-    @app.get("/backfill_range")
+
+
+@app.get("/backfill_range")
 def backfill_range_endpoint(
     start: str = Query(..., description="Startdatum YYYY-MM-DD"),
     end: str = Query(..., description="Enddatum YYYY-MM-DD"),
@@ -136,7 +180,6 @@ def backfill_range_endpoint(
         raise HTTPException(status_code=400, detail=str(e))
 
     return {"status": "ok", **summary}
-
 
 
 @app.get("/")
