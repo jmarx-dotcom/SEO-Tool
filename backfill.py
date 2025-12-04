@@ -122,3 +122,44 @@ def backfill_day(date_str: str) -> Dict:
         "urls_found": len(urls),
         "articles_saved": saved,
     }
+from datetime import timedelta
+
+
+def backfill_range(start_date_str: str, end_date_str: str) -> Dict:
+    """
+    Backfill für einen ganzen Zeitraum (inklusive), z.B. 2024-08-01 bis 2025-07-31.
+    Ruft intern backfill_day für jeden Tag auf.
+    """
+    try:
+        start = datetime.strptime(start_date_str, "%Y-%m-%d").date()
+        end = datetime.strptime(end_date_str, "%Y-%m-%d").date()
+    except ValueError:
+        raise ValueError("Start und Ende müssen im Format YYYY-MM-DD sein, z.B. 2025-07-01")
+
+    if end < start:
+        raise ValueError("Enddatum muss nach dem Startdatum liegen")
+
+    init_db()
+
+    total_urls = 0
+    total_saved = 0
+    per_day: Dict[str, Dict] = {}
+
+    current = start
+    while current <= end:
+        date_str = current.isoformat()
+        print(f"▶ Backfill für {date_str}")
+        summary = backfill_day(date_str)
+        per_day[date_str] = summary
+        total_urls += summary.get("urls_found", 0)
+        total_saved += summary.get("articles_saved", 0)
+        current += timedelta(days=1)
+
+    return {
+        "start_date": start.isoformat(),
+        "end_date": end.isoformat(),
+        "days": (end - start).days + 1,
+        "total_urls_found": total_urls,
+        "total_articles_saved": total_saved,
+        "per_day": per_day,
+    }
