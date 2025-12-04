@@ -1,6 +1,7 @@
 # db.py
 
 import sqlite3
+import unicodedata
 from datetime import datetime
 from pathlib import Path
 
@@ -11,6 +12,32 @@ def get_connection():
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     return conn
+
+def expand_search_variants(term: str) -> list[str]:
+    """
+    Baut verschiedene Varianten eines Suchbegriffs:
+    - original (kleingeschrieben)
+    - ohne Akzente (ä -> a)
+    - mit ae/oe/ue/ss (ä -> ae, ß -> ss)
+    """
+    term_lower = term.lower()
+    variants = set([term_lower])
+
+    # Variante ohne Akzente (ä -> a, ü -> u ...)
+    no_accents = "".join(
+        c for c in unicodedata.normalize("NFD", term_lower)
+        if unicodedata.category(c) != "Mn"
+    )
+    variants.add(no_accents)
+
+    # Variante mit ae/oe/ue/ss
+    trans = term_lower
+    trans = trans.replace("ä", "ae").replace("ö", "oe").replace("ü", "ue")
+    trans = trans.replace("ß", "ss")
+    variants.add(trans)
+
+    return sorted(v for v in variants if v)
+
 
 
 def init_db():
@@ -60,25 +87,58 @@ def save_article(*, url, title, summary="", content="", published_at=None, sourc
     conn.close()
 
 
-def search_articles(query: str, limit: int = 20):
-    """Einfache Textsuche in Titel, Summary und Content."""
+def search_articles(
+    query: str,
+    limit: int = 20,
+    from_date: str | None = None,
+    to_date: str | None = None,
+):
+    """Textsuche in Titel, Summary und Content mit optionalem Datumsfilter (YYYY-MM-DD) und Umlaut-Varianten."""
     conn = get_connection()
     cur = conn.cursor()
-    like = f"%{query}%"
-    cur.execute(
-        """
+
+    variants = expand_search_variants(query)
+    where_clauses = []
+    params: list = []
+
+    # Für jede Variante bauen wir ein OR-Paket:
+    # (LOWER(title) LIKE ?) OR (LOWER(summary) LIKE ?) OR (LOWER(content) LIKE ?)
+    for v in variants:
+        pattern = f"%{v}%"
+        where_clauses.append(
+            "(LOWER(title) LIKE ? OR LOWER(summary) LIKE ? OR LOWER(content) LIKE ?)"
+        )
+        params.extend([pattern, pattern, pattern])
+
+    # Alle Varianten mit OR verknüpfen
+    text_where = " OR ".join(where_clauses)
+
+    full_where_clauses = [f"({text_where})"]
+
+    # Datumsfilter
+    if from_date:
+        full_where_clauses.append("published_at >= ?")
+        params.append(from_date)
+    if to_date:
+        full_where_clauses.append("published_at <= ?")
+        params.append(to_date + "T23:59:59")
+
+    where_sql = " AND ".join(full_where_clauses)
+
+    sql = f"""
         SELECT id, url, title, summary, published_at, source
         FROM articles
-        WHERE title LIKE ? OR summary LIKE ? OR content LIKE ?
+        WHERE {where_sql}
         ORDER BY 
-            (published_at IS NULL),        -- NULLS kommen ans Ende
+            (published_at IS NULL),
             published_at DESC,
             id DESC
         LIMIT ?
+    """
 
-        """,
-        (like, like, like, limit),
-    )
+    params.append(limit)
+
+    cur.execute(sql, params)
     rows = cur.fetchall()
     conn.close()
     return [dict(row) for row in rows]
