@@ -116,6 +116,27 @@ def backfill_day_endpoint(
         raise HTTPException(status_code=400, detail=str(e))
 
     return {"status": "ok", **summary}
+    @app.get("/backfill_range")
+def backfill_range_endpoint(
+    start: str = Query(..., description="Startdatum YYYY-MM-DD"),
+    end: str = Query(..., description="Enddatum YYYY-MM-DD"),
+    token: str = Query(..., description="Secret-Token zum Auslösen des Backfills"),
+):
+    """
+    Backfill für einen Zeitraum von Start bis Ende (inklusive).
+    Beispiel:
+    /backfill_range?start=2025-07-01&end=2025-07-31&token=DEIN_TOKEN
+    """
+    if token != INGEST_TOKEN:
+        raise HTTPException(status_code=403, detail="Ungültiger Token")
+
+    try:
+        summary = backfill_range_func(start, end)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    return {"status": "ok", **summary}
+
 
 
 @app.get("/")
