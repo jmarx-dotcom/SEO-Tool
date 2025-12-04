@@ -8,7 +8,7 @@ from fastapi.responses import JSONResponse
 
 from db import search_articles, init_db
 from ingest import ingest_all
-from backfill import backfill_day as backfill_day_func
+from backfill import backfill_day as backfill_day_func, backfill_range as backfill_range_func
 
 
 app = FastAPI(title="Lokal-Archiv-Tool")
