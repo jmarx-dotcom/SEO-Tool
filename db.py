@@ -142,3 +142,82 @@ def search_articles(
     rows = cur.fetchall()
     conn.close()
     return [dict(row) for row in rows]
+    
+def get_republish_candidates(
+    topic: str | None,
+    from_date: str,
+    to_date: str,
+    limit: int = 20,
+):
+    """
+    Liefert Artikel für Republishing-Empfehlungen:
+
+    - Zeitraum via from_date/to_date (YYYY-MM-DD)
+    - optional Themen-Keyword (topic)
+    - filtert offensichtliche 'Hard News' über Titel aus
+    """
+    conn = get_connection()
+    cur = conn.cursor()
+
+    where_clauses = []
+    params: list = []
+
+    # 1. Topic / Suchbegriff (optional)
+    if topic:
+        variants = expand_search_variants(topic)
+        text_clauses = []
+        for v in variants:
+            pattern = f"%{v}%"
+            text_clauses.append(
+                "(LOWER(title) LIKE ? OR LOWER(summary) LIKE ? OR LOWER(content) LIKE ?)"
+            )
+            params.extend([pattern, pattern, pattern])
+        where_clauses.append("(" + " OR ".join(text_clauses) + ")")
+
+    # 2. Datumsbereich
+    where_clauses.append("published_at >= ?")
+    params.append(from_date)
+    where_clauses.append("published_at <= ?")
+    params.append(to_date + "T23:59:59")
+
+    # 3. 'Hard News' über Titel ausschließen
+    exclude_terms = [
+        "unfall",
+        "feuerwehr",
+        "brand",
+        "polizei",
+        "prozess",
+        "gericht",
+        "festgenommen",
+        "festnahme",
+        "verhaftet",
+        "wetterwarnung",
+        "sturmwarnung",
+        "sport",
+        "spiel",
+        "tor",
+        "ergebnis",
+    ]
+    for term in exclude_terms:
+        where_clauses.append("LOWER(title) NOT LIKE ?")
+        params.append(f"%{term}%")
+
+    where_sql = " AND ".join(where_clauses)
+
+    sql = f"""
+        SELECT id, url, title, summary, published_at, source
+        FROM articles
+        WHERE {where_sql}
+        ORDER BY 
+            (published_at IS NULL),
+            published_at DESC,
+            id DESC
+        LIMIT ?
+    """
+
+    params.append(limit)
+
+    cur.execute(sql, params)
+    rows = cur.fetchall()
+    conn.close()
+    return [dict(row) for row in rows]
