@@ -1,11 +1,11 @@
 # app.py
 
 import os
+from datetime import datetime, timedelta
 
 from fastapi import FastAPI, HTTPException, Query, Form
 from fastapi.responses import JSONResponse
 
-from datetime import datetime, timedelta
 from db import search_articles, init_db, get_republish_candidates
 from ingest import ingest_all
 from backfill import backfill_day as backfill_day_func, backfill_range as backfill_range_func
@@ -181,8 +181,9 @@ def backfill_range_endpoint(
         raise HTTPException(status_code=400, detail=str(e))
 
     return {"status": "ok", **summary}
-    
-    @app.get("/republish_candidates")
+
+
+@app.get("/republish_candidates")
 def republish_candidates_endpoint(
     topic: str | None = Query(None, description="Optionales Themen-Keyword, z.B. 'Weihnachtsmarkt'"),
     limit: int = 10,
@@ -223,6 +224,91 @@ def republish_candidates_endpoint(
         "results": results,
     }
 
+
+@app.post("/slack/republish")
+async def slack_republish(
+    text: str = Form(""),
+    user_name: str | None = Form(None),
+    channel_id: str | None = Form(None),
+):
+    """
+    Slash-Command-Endpoint für Slack: /republish <Thema> [seit:YYYY-MM-DD] [bis:YYYY-MM-DD]
+
+    Beispiele:
+    - /republish Weihnachtsmarkt
+    - /republish Hochschulsport seit:2023-01-01
+    """
+    raw = text.strip()
+
+    # Defaults: ca. 3 Jahre zurück, bis vor 6 Monaten
+    today = datetime.utcnow().date()
+    default_to = (today - timedelta(days=180)).isoformat()
+    default_from = (today - timedelta(days=3 * 365)).isoformat()
+
+    if not raw:
+        return {
+            "response_type": "ephemeral",
+            "text": (
+                "Bitte gib ein Thema an, z.B. `/republish Weihnachtsmarkt` "
+                "oder `/republish Hochschulsport seit:2023-01-01`."
+            ),
+        }
+
+    parts = raw.split()
+    topic_parts: list[str] = []
+    from_date: str | None = None
+    to_date: str | None = None
+
+    for part in parts:
+        if part.startswith("seit:"):
+            from_date = part.removeprefix("seit:")
+        elif part.startswith("bis:"):
+            to_date = part.removeprefix("bis:")
+        else:
+            topic_parts.append(part)
+
+    topic = " ".join(topic_parts).strip() or None
+
+    if not from_date:
+        from_date = default_from
+    if not to_date:
+        to_date = default_to
+
+    results = get_republish_candidates(topic, from_date, to_date, limit=5)
+
+    if not results:
+        return {
+            "response_type": "ephemeral",
+            "text": (
+                f"Keine Republish-Kandidaten für `{topic or 'alle Themen'}` "
+                f"im Zeitraum {from_date} bis {to_date} gefunden."
+            ),
+        }
+
+    lines = []
+    for art in results:
+        title = art.get("title") or "(ohne Titel)"
+        url = art.get("url") or ""
+        published_at = art.get("published_at") or "ohne Datum"
+        source = art.get("source") or ""
+
+        line = (
+            f"*{title}*\n"
+            f"{published_at} · {source}\n"
+            f"<{url}|Artikel öffnen>"
+        )
+        lines.append(line)
+
+    topic_info = f"`{topic}`" if topic else "alle Themen"
+    text_response = (
+        f"Republish-Kandidaten für {topic_info} "
+        f"(Zeitraum {from_date} bis {to_date}):\n\n" + "\n\n".join(lines)
+    )
+
+    return {
+        "response_type": "in_channel",
+        "text": text_response,
+    }
 
 
 @app.get("/")
