@@ -181,6 +181,48 @@ def backfill_range_endpoint(
         raise HTTPException(status_code=400, detail=str(e))
 
     return {"status": "ok", **summary}
+    
+    @app.get("/republish_candidates")
+def republish_candidates_endpoint(
+    topic: str | None = Query(None, description="Optionales Themen-Keyword, z.B. 'Weihnachtsmarkt'"),
+    limit: int = 10,
+    from_date: str | None = Query(
+        None, description="Startdatum YYYY-MM-DD (optional, Standard ~3 Jahre zurück)"
+    ),
+    to_date: str | None = Query(
+        None, description="Enddatum YYYY-MM-DD (optional, Standard: älter als 6 Monate)"
+    ),
+):
+    """
+    Liefert Artikel, die sich als Republishing-Kandidaten eignen könnten.
+
+    Standard:
+    - älter als 6 Monate
+    - maximal ca. 3 Jahre zurück
+    - 'Hard News' (Unfall, Polizei, Brand etc.) werden über den Titel ausgeschlossen
+    """
+    today = datetime.utcnow().date()
+
+    if not to_date:
+        # maximaler Aktualitätsstand für Republish-Kandidaten: 6 Monate alt
+        max_date = today - timedelta(days=180)
+        to_date = max_date.isoformat()
+
+    if not from_date:
+        # Standard: ca. 3 Jahre zurück
+        min_date = today - timedelta(days=3 * 365)
+        from_date = min_date.isoformat()
+
+    results = get_republish_candidates(topic, from_date, to_date, limit=limit)
+
+    return {
+        "topic": topic,
+        "from_date": from_date,
+        "to_date": to_date,
+        "count": len(results),
+        "results": results,
+    }
+
 
 
 @app.get("/")
