@@ -186,7 +186,7 @@ def backfill_range_endpoint(
 @app.get("/republish_candidates")
 def republish_candidates_endpoint(
     topic: str | None = Query(None, description="Optionales Themen-Keyword, z.B. 'Weihnachtsmarkt'"),
-    limit: int = 10,
+    limit: int = 50,
     from_date: str | None = Query(
         None, description="Startdatum YYYY-MM-DD (optional, Standard ~3 Jahre zurück)"
     ),
@@ -201,6 +201,8 @@ def republish_candidates_endpoint(
     - älter als 6 Monate
     - maximal ca. 3 Jahre zurück
     - 'Hard News' (Unfall, Polizei, Brand etc.) werden über den Titel ausgeschlossen
+
+    limit: Anzahl der Ergebnisse (Standard 50)
     """
     today = datetime.utcnow().date()
 
@@ -214,7 +216,12 @@ def republish_candidates_endpoint(
         min_date = today - timedelta(days=3 * 365)
         from_date = min_date.isoformat()
 
+    # 1. Versuchen mit 'schlauer' Republish-Logik
     results = get_republish_candidates(topic, from_date, to_date, limit=limit)
+
+    # 2. Fallback: wenn nichts gefunden, normale Volltextsuche
+    if not results and topic:
+        results = search_articles(topic, limit=limit, from_date=from_date, to_date=to_date)
 
     return {
         "topic": topic,
@@ -232,11 +239,12 @@ async def slack_republish(
     channel_id: str | None = Form(None),
 ):
     """
-    Slash-Command-Endpoint für Slack: /republish <Thema> [seit:YYYY-MM-DD] [bis:YYYY-MM-DD]
+    Slash-Command-Endpoint für Slack: /republish <Thema> [seit:YYYY-MM-DD] [bis:YYYY-MM-DD] [limit:ZAHL]
 
     Beispiele:
     - /republish Weihnachtsmarkt
-    - /republish Hochschulsport seit:2023-01-01
+    - /republish Weihnachtsmarkt seit:2023-01-01
+    - /republish Weihnachtsmarkt seit:2023-01-01 bis:2024-12-31 limit:50
     """
     raw = text.strip()
 
@@ -250,7 +258,7 @@ async def slack_republish(
             "response_type": "ephemeral",
             "text": (
                 "Bitte gib ein Thema an, z.B. `/republish Weihnachtsmarkt` "
-                "oder `/republish Hochschulsport seit:2023-01-01`."
+                "oder `/republish Weihnachtsmarkt seit:2023-01-01 limit:50`."
             ),
         }
 
@@ -258,12 +266,23 @@ async def slack_republish(
     topic_parts: list[str] = []
     from_date: str | None = None
     to_date: str | None = None
+    limit_value: int = 20  # Default in Slack
+    max_limit: int = 100   # Harte Obergrenze, um Slack nicht zu sprengen
 
     for part in parts:
         if part.startswith("seit:"):
             from_date = part.removeprefix("seit:")
         elif part.startswith("bis:"):
             to_date = part.removeprefix("bis:")
+        elif part.startswith("limit:"):
+            limit_str = part.removeprefix("limit:")
+            try:
+                limit_parsed = int(limit_str)
+                if limit_parsed > 0:
+                    limit_value = min(limit_parsed, max_limit)
+            except ValueError:
+                # Ignorieren, wenn keine gültige Zahl
+                pass
         else:
             topic_parts.append(part)
 
@@ -274,7 +293,12 @@ async def slack_republish(
     if not to_date:
         to_date = default_to
 
-    results = get_republish_candidates(topic, from_date, to_date, limit=5)
+    # 1. Versuchen mit 'schlauer' Republish-Logik
+    results = get_republish_candidates(topic, from_date, to_date, limit=limit_value)
+
+    # 2. Fallback: wenn nichts gefunden, normale Volltextsuche
+    if not results and topic:
+        results = search_articles(topic, limit=limit_value, from_date=from_date, to_date=to_date)
 
     if not results:
         return {
@@ -301,8 +325,9 @@ async def slack_republish(
 
     topic_info = f"`{topic}`" if topic else "alle Themen"
     text_response = (
-        f"Republish-Kandidaten für {topic_info} "
-        f"(Zeitraum {from_date} bis {to_date}):\n\n" + "\n\n".join(lines)
+        f"{len(results)} Republish-Kandidaten für {topic_info} "
+        f"(Zeitraum {from_date} bis {to_date}, Limit {limit_value}):\n\n"
+        + "\n\n".join(lines)
     )
 
     return {
