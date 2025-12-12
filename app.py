@@ -3,6 +3,7 @@
 import os
 from datetime import datetime, timedelta
 
+import requests
 from fastapi import FastAPI, HTTPException, Query, Form
 from fastapi.responses import JSONResponse
 
@@ -17,6 +18,27 @@ init_db()
 
 # Secret-Token, das wir in Render als Environment Variable setzen
 INGEST_TOKEN = os.getenv("INGEST_TOKEN", "changeme")
+
+# Slack-Webhook für Push-Nachrichten (Incoming Webhook URL in Render als SLACK_WEBHOOK_URL setzen)
+SLACK_WEBHOOK_URL = os.getenv("SLACK_WEBHOOK_URL")
+
+
+def post_to_slack(text: str) -> None:
+    """Einfache Hilfsfunktion, um Text an einen Slack-Webhook zu schicken."""
+    if not SLACK_WEBHOOK_URL:
+        # Wenn kein Webhook gesetzt ist, einfach nichts schicken
+        return
+    try:
+        resp = requests.post(
+            SLACK_WEBHOOK_URL,
+            json={"text": text},
+            timeout=5,
+        )
+        # Fehler nicht hochwerfen, sondern nur im Worst Case ignorieren
+        _ = resp.text  # verhindert "unused variable" in manchen Lintern
+    except Exception:
+        # Fürs Logging könnte man hier noch print/loggen, für MVP ignorieren
+        pass
 
 
 @app.get("/search")
@@ -333,6 +355,86 @@ async def slack_republish(
     return {
         "response_type": "in_channel",
         "text": text_response,
+    }
+
+
+@app.get("/seo/weekly_digest")
+def seo_weekly_digest(
+    token: str = Query(..., description="Secret-Token zum Auslösen des SEO-Digests"),
+    topic: str | None = Query(
+        None,
+        description="Optionales Themen-Keyword, z.B. 'Weihnachtsmarkt'. Wenn leer, alle Themen.",
+    ),
+    limit: int = 20,
+):
+    """
+    Baut einen SEO-/Republishing-Digest und schickt ihn per Slack-Webhook.
+
+    Standard:
+    - Zeitraum: ca. 3 Jahre zurück bis vor 6 Monaten
+    - Hard-News werden wie in get_republish_candidates ausgeschlossen
+    - Wenn topic gesetzt ist, werden die Kandidaten thematisch gefiltert.
+    """
+    if token != INGEST_TOKEN:
+        raise HTTPException(status_code=403, detail="Ungültiger Token")
+
+    today = datetime.utcnow().date()
+    to_date = (today - timedelta(days=180)).isoformat()
+    from_date = (today - timedelta(days=3 * 365)).isoformat()
+
+    # 1. Kandidaten via Republish-Logik holen
+    candidates = get_republish_candidates(topic, from_date, to_date, limit=limit)
+
+    # 2. Fallback: normale Volltextsuche, falls ein Thema gesetzt ist und nichts gefunden wurde
+    if not candidates and topic:
+        candidates = search_articles(topic, limit=limit, from_date=from_date, to_date=to_date)
+
+    if not candidates:
+        text = (
+            f"SEO-Weekly: Keine Republish-Kandidaten für {topic or 'alle Themen'} "
+            f"im Zeitraum {from_date} bis {to_date} gefunden."
+        )
+        post_to_slack(text)
+        return {
+            "status": "ok",
+            "sent": False,
+            "reason": "no_candidates",
+            "topic": topic,
+            "from_date": from_date,
+            "to_date": to_date,
+        }
+
+    lines = []
+    for art in candidates:
+        title = art.get("title") or "(ohne Titel)"
+        url = art.get("url") or ""
+        published_at_raw = art.get("published_at") or "ohne Datum"
+        published_date = published_at_raw.split("T")[0] if "T" in published_at_raw else published_at_raw
+        source = art.get("source") or ""
+
+        line = (
+            f"*{title}*\n"
+            f"{published_date} · {source}\n"
+            f"<{url}|Artikel öffnen>"
+        )
+        lines.append(line)
+
+    topic_info = f"`{topic}`" if topic else "alle Themen"
+    header = (
+        f"SEO-Weekly: Republish-Kandidaten für {topic_info} "
+        f"(Zeitraum {from_date} bis {to_date}, max. {limit} Stück):"
+    )
+    text = header + "\n\n" + "\n\n".join(lines)
+
+    post_to_slack(text)
+
+    return {
+        "status": "ok",
+        "sent": True,
+        "topic": topic,
+        "from_date": from_date,
+        "to_date": to_date,
+        "count": len(candidates),
     }
 
 
